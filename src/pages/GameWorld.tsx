@@ -29,7 +29,52 @@ const THEMES = {
 type ThemeKey = keyof typeof THEMES;
 
 interface EnemyObj { id: string; mesh: THREE.Group; hp: number; }
-interface GameCommand { action: string; type?: string; count?: number; effect?: string; skin?: string; }
+
+interface PartSpec {
+  geo: { type: string; w?: number; h?: number; d?: number; r?: number; rt?: number; rb?: number; segments?: number };
+  mat: { color: number; emissive?: number; emissiveIntensity?: number; roughness?: number; metalness?: number; transparent?: boolean; opacity?: number };
+  pos?: [number, number, number];
+  rot?: [number, number, number];
+  scale?: [number, number, number];
+}
+
+interface GameCommand {
+  action: string; type?: string; count?: number; effect?: string; skin?: string;
+  // proc_build
+  name?: string; parts?: PartSpec[]; mountable?: boolean; mount_offset?: [number, number, number]; speed?: number;
+}
+
+interface MountableObj {
+  mesh: THREE.Group; speed: number; mountOffset: THREE.Vector3;
+}
+
+function buildFromSpec(parts: PartSpec[]): THREE.Group {
+  const g = new THREE.Group();
+  for (const p of parts) {
+    let geometry: THREE.BufferGeometry;
+    const { geo } = p;
+    if (geo.type === "box") geometry = new THREE.BoxGeometry(geo.w ?? 1, geo.h ?? 1, geo.d ?? 1);
+    else if (geo.type === "sphere") geometry = new THREE.SphereGeometry(geo.r ?? 0.5, geo.segments ?? 8, geo.segments ?? 8);
+    else if (geo.type === "cylinder") geometry = new THREE.CylinderGeometry(geo.rt ?? 0.5, geo.rb ?? 0.5, geo.h ?? 1, geo.segments ?? 8);
+    else if (geo.type === "cone") geometry = new THREE.ConeGeometry(geo.r ?? 0.5, geo.h ?? 1, geo.segments ?? 6);
+    else geometry = new THREE.BoxGeometry(1, 1, 1);
+
+    const matOpts: THREE.MeshStandardMaterialParameters = {
+      color: p.mat.color,
+      roughness: p.mat.roughness ?? 0.7,
+      metalness: p.mat.metalness ?? 0,
+    };
+    if (p.mat.emissive !== undefined) { matOpts.emissive = new THREE.Color(p.mat.emissive); matOpts.emissiveIntensity = p.mat.emissiveIntensity ?? 1; }
+    if (p.mat.transparent) { matOpts.transparent = true; matOpts.opacity = p.mat.opacity ?? 0.7; }
+
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial(matOpts));
+    if (p.pos) mesh.position.set(...p.pos);
+    if (p.rot) mesh.rotation.set(...p.rot);
+    if (p.scale) mesh.scale.set(...p.scale);
+    g.add(mesh);
+  }
+  return g;
+}
 
 function buildHumanoid(bodyColor: number, glowEyes = false): THREE.Group {
   const g = new THREE.Group();
@@ -71,11 +116,14 @@ export default function GameWorld() {
   const rafRef = useRef<number>(0);
   const keysRef = useRef({ w: false, a: false, s: false, d: false, space: false });
   const joystickRef = useRef({ dx: 0, dy: 0, active: false });
+  const mountablesRef = useRef<MountableObj[]>([]);
+  const mountedRef = useRef<MountableObj | null>(null);
+  const [mountHint, setMountHint] = useState<string | null>(null);
 
   const [enemyCount, setEnemyCount] = useState(3);
   const [chatMessage, setChatMessage] = useState("");
   const [chatHistory, setChatHistory] = useState<{ role: "user" | "ai"; text: string }[]>([
-    { role: "ai", text: "Привет! Я могу менять твой мир 🎮 Попробуй: «добавь роботов» или «поставь дерево»!" }
+    { role: "ai", text: "Привет! Я строю всё что ты скажешь прямо в игре 🎮\n\nПопробуй:\n• «Добавь горы»\n• «Поставь красный автомобиль»\n• «Построй замок»\n• «Добавь 5 зомби»\n• «Поставь волшебное дерево со светящимися плодами»" }
   ]);
   const [isLoading, setIsLoading] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
@@ -131,12 +179,46 @@ export default function GameWorld() {
   const applyCommand = useCallback((cmd: GameCommand) => {
     const scene = sceneRef.current;
     if (!scene) return;
+
+    // Добавить врагов
     if (cmd.action === "add_enemy") {
-      const count = Math.min(cmd.count || 1, 5);
+      const count = Math.min(cmd.count || 1, 8);
       for (let i = 0; i < count; i++) spawnEnemy(scene);
     }
+
+    // Процедурная генерация произвольного объекта по спецификации от ИИ
+    if (cmd.action === "proc_build" && cmd.parts && cmd.parts.length > 0) {
+      const copies = Math.min(cmd.count || 1, 6);
+      for (let c = 0; c < copies; c++) {
+        const obj = buildFromSpec(cmd.parts);
+        // Размещаем рядом с игроком — но не прямо на нём
+        const angle = (c / copies) * Math.PI * 2;
+        const dist = 5 + Math.random() * 8;
+        const px = playerPosRef.current.x + Math.sin(angle) * dist;
+        const pz = playerPosRef.current.z + Math.cos(angle) * dist;
+        obj.position.set(px, 0, pz);
+        scene.add(obj);
+
+        if (cmd.mountable) {
+          const mo: MountableObj = {
+            mesh: obj,
+            speed: cmd.speed ?? 8,
+            mountOffset: new THREE.Vector3(...(cmd.mount_offset ?? [0, 1.2, 0])),
+          };
+          mountablesRef.current.push(mo);
+          setMountHint(`Подойди к ${cmd.name ?? "объекту"} и нажми E / кнопку`);
+          setTimeout(() => setMountHint(null), 4000);
+        }
+      }
+    }
+
+    // Старый add_object — оставляем для совместимости
     if (cmd.action === "add_object") {
-      const pos = new THREE.Vector3((Math.random() - 0.5) * 18, 0, (Math.random() - 0.5) * 18);
+      const pos = new THREE.Vector3(
+        playerPosRef.current.x + (Math.random() - 0.5) * 14,
+        0,
+        playerPosRef.current.z + (Math.random() - 0.5) * 14
+      );
       if (cmd.type === "tree") {
         const g = new THREE.Group();
         const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.2, 1.5), new THREE.MeshStandardMaterial({ color: 0x8B6340 }));
@@ -151,6 +233,8 @@ export default function GameWorld() {
         scene.add(box);
       }
     }
+
+    // Изменить оружие
     if (cmd.action === "change_weapon" && weaponRef.current) {
       const effect = cmd.effect || "normal";
       const c = effect.includes("fire") ? 0xFF6600 : effect.includes("ice") ? 0x00D4FF : effect.includes("lightning") ? 0xFFFF00 : theme.playerColor;
@@ -249,14 +333,28 @@ export default function GameWorld() {
       if (k.d || (j.active && j.dx > 0.3)) moveDir.x += 1;
       if (moveDir.length() > 0) { moveDir.normalize(); playerRotRef.current = Math.atan2(moveDir.x, moveDir.z); }
 
-      playerVelRef.current.x = moveDir.x * 5;
-      playerVelRef.current.z = moveDir.z * 5;
-      if (k.space && onGroundRef.current) { playerVelRef.current.y = 8; onGroundRef.current = false; k.space = false; }
-      playerVelRef.current.y -= 20 * delta;
-      playerPosRef.current.addScaledVector(playerVelRef.current, delta);
-      if (playerPosRef.current.y <= 0.8) { playerPosRef.current.y = 0.8; playerVelRef.current.y = 0; onGroundRef.current = true; }
-      playerPosRef.current.x = Math.max(-24, Math.min(24, playerPosRef.current.x));
-      playerPosRef.current.z = Math.max(-24, Math.min(24, playerPosRef.current.z));
+      const mounted = mountedRef.current;
+      if (mounted) {
+        // Едем на транспорте
+        const spd = mounted.speed;
+        mounted.mesh.position.x += moveDir.x * spd * delta;
+        mounted.mesh.position.z += moveDir.z * spd * delta;
+        mounted.mesh.position.x = Math.max(-24, Math.min(24, mounted.mesh.position.x));
+        mounted.mesh.position.z = Math.max(-24, Math.min(24, mounted.mesh.position.z));
+        if (moveDir.length() > 0) mounted.mesh.rotation.y = playerRotRef.current;
+        // Игрок едет вместе
+        playerPosRef.current.copy(mounted.mesh.position).add(mounted.mountOffset);
+      } else {
+        // Пешком
+        playerVelRef.current.x = moveDir.x * 5;
+        playerVelRef.current.z = moveDir.z * 5;
+        if (k.space && onGroundRef.current) { playerVelRef.current.y = 8; onGroundRef.current = false; k.space = false; }
+        playerVelRef.current.y -= 20 * delta;
+        playerPosRef.current.addScaledVector(playerVelRef.current, delta);
+        if (playerPosRef.current.y <= 0.8) { playerPosRef.current.y = 0.8; playerVelRef.current.y = 0; onGroundRef.current = true; }
+        playerPosRef.current.x = Math.max(-24, Math.min(24, playerPosRef.current.x));
+        playerPosRef.current.z = Math.max(-24, Math.min(24, playerPosRef.current.z));
+      }
 
       if (player) {
         player.position.copy(playerPosRef.current);
@@ -318,6 +416,7 @@ export default function GameWorld() {
       if (e.code === "KeyS") k.s = true;
       if (e.code === "KeyD") k.d = true;
       if (e.code === "Space") { e.preventDefault(); k.space = true; }
+      if (e.code === "KeyE") handleMount();
     };
     const onKeyUp = (e: KeyboardEvent) => {
       const k = keysRef.current;
@@ -334,42 +433,29 @@ export default function GameWorld() {
 
   useEffect(() => { joystickRef.current = joystick; }, [joystick]);
 
+  const handleMount = useCallback(() => {
+    if (mountedRef.current) {
+      // Высадка
+      mountedRef.current = null;
+      playerPosRef.current.y = 0.8;
+      setMountHint(null);
+      return;
+    }
+    // Ищем ближайший транспорт
+    const pp = playerPosRef.current;
+    const nearest = mountablesRef.current.find((mo) => {
+      const dx = mo.mesh.position.x - pp.x;
+      const dz = mo.mesh.position.z - pp.z;
+      return Math.sqrt(dx * dx + dz * dz) < 3.5;
+    });
+    if (nearest) {
+      mountedRef.current = nearest;
+      setMountHint(null);
+    }
+  }, []);
+
   const scrollChatToBottom = () => {
     setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
-  };
-
-  // Локальный парсер — работает без API ключа
-  const localParse = (msg: string): { commands: GameCommand[]; reply: string } | null => {
-    const m = msg.toLowerCase();
-    // Враги
-    const enemyMatch = m.match(/(\d+)?\s*(робот|зомби|враг|монстр|пришелец|alien|robot|zombie|enemy)/);
-    if (m.includes("добав") && enemyMatch) {
-      const count = Math.min(parseInt(enemyMatch[1] || "1"), 5);
-      const type = m.includes("робот") || m.includes("robot") ? "robot"
-        : m.includes("зомби") || m.includes("zombie") ? "zombie"
-        : m.includes("пришелец") || m.includes("alien") ? "alien" : "robot";
-      return { commands: [{ action: "add_enemy", type, count }], reply: `Добавляю ${count} ${type === "robot" ? "роботов" : type === "zombie" ? "зомби" : "пришельцев"}! 🤖` };
-    }
-    // Деревья
-    if ((m.includes("добав") || m.includes("постав")) && (m.includes("дерев") || m.includes("tree"))) {
-      return { commands: [{ action: "add_object", type: "tree" }], reply: "Сажаю дерево! 🌳" };
-    }
-    // Кристалл / камень
-    if ((m.includes("добав") || m.includes("постав")) && (m.includes("кристалл") || m.includes("камен") || m.includes("ящик") || m.includes("chest"))) {
-      const type = m.includes("кристалл") ? "crystal" : "rock";
-      return { commands: [{ action: "add_object", type }], reply: `Ставлю ${type === "crystal" ? "кристалл" : "камень"}! ✨` };
-    }
-    // Оружие
-    if (m.includes("огонь") || m.includes("fire") || m.includes("пожар")) {
-      return { commands: [{ action: "change_weapon", effect: "fire_blue" }], reply: "Оружие в огне! 🔥" };
-    }
-    if (m.includes("лёд") || m.includes("лед") || m.includes("ice") || m.includes("заморозь")) {
-      return { commands: [{ action: "change_weapon", effect: "ice" }], reply: "Ледяное оружие! ❄️" };
-    }
-    if (m.includes("молни") || m.includes("lightning")) {
-      return { commands: [{ action: "change_weapon", effect: "lightning" }], reply: "Молниеносное оружие! ⚡" };
-    }
-    return null;
   };
 
   const handleSendMessage = async (overrideMsg?: string) => {
@@ -380,35 +466,17 @@ export default function GameWorld() {
     setIsLoading(true);
     scrollChatToBottom();
 
-    // Сначала пробуем локальный парсер (мгновенно)
-    const local = localParse(msg);
-    if (local) {
-      setTimeout(() => {
-        local.commands.forEach((cmd) => applyCommand(cmd));
-        setChatHistory((h) => [...h, { role: "ai", text: local.reply }]);
-        setIsLoading(false);
-        scrollChatToBottom();
-      }, 300);
-      return;
-    }
-
-    // Если не распознали — идём к Claude
     try {
       const res = await fetch("https://functions.poehali.dev/97def82a-1abb-45e6-9c01-a082dc689fa8", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: msg, style: themeKey, world_state: { enemies_count: enemyCount } }),
       });
       const data = await res.json();
-      if (data.errorMessage || res.status >= 400) {
-        // API ключ не настроен — используем заглушку
-        setChatHistory((h) => [...h, { role: "ai", text: "Попробуй команды: «добавь 3 робота», «поставь дерево», «огненное оружие» 🎮" }]);
-      } else {
-        const reply = data.reply || "Готово! 🎮";
-        setChatHistory((h) => [...h, { role: "ai", text: reply }]);
-        if (data.commands) data.commands.forEach((cmd: GameCommand) => applyCommand(cmd));
-      }
+      const reply = data.reply || "Готово! 🎮";
+      setChatHistory((h) => [...h, { role: "ai", text: reply }]);
+      if (data.commands) data.commands.forEach((cmd: GameCommand) => applyCommand(cmd));
     } catch {
-      setChatHistory((h) => [...h, { role: "ai", text: "Попробуй: «добавь роботов», «поставь дерево», «огненное оружие» 🎮" }]);
+      setChatHistory((h) => [...h, { role: "ai", text: "Ошибка соединения 😔 Проверь API ключ в настройках проекта." }]);
     } finally {
       setIsLoading(false);
       scrollChatToBottom();
@@ -481,7 +549,15 @@ export default function GameWorld() {
       {!isMobile && (
         <div className="absolute bottom-20 right-3 z-10 px-3 py-2 rounded font-pixel text-[7px] leading-relaxed"
           style={{ background: "#00000088", border: "1px solid #ffffff22", color: "#ffffff88", backdropFilter: "blur(4px)" }}>
-          WASD — движение<br />ПРОБЕЛ — прыжок<br />ЛКМ — удар
+          WASD — движение<br />ПРОБЕЛ — прыжок<br />ЛКМ — удар<br />E — сесть/выйти
+        </div>
+      )}
+
+      {/* Подсказка транспорта */}
+      {mountHint && (
+        <div className="absolute top-16 left-1/2 z-20 px-4 py-2 rounded-xl font-rubik text-sm text-center"
+          style={{ transform: "translateX(-50%)", background: "#000000cc", border: `1px solid ${theme.accentCss}`, color: theme.accentCss, backdropFilter: "blur(8px)" }}>
+          {mountHint}
         </div>
       )}
 
@@ -505,6 +581,9 @@ export default function GameWorld() {
             <button className="w-12 h-12 rounded-full text-xl flex items-center justify-center select-none"
               style={{ background: "#ffffff22", border: "2px solid #ffffff44", touchAction: "manipulation" }}
               onTouchStart={(e) => { e.preventDefault(); keysRef.current.space = true; setTimeout(() => { keysRef.current.space = false; }, 120); }}>🦘</button>
+            <button className="w-12 h-12 rounded-full text-lg flex items-center justify-center select-none"
+              style={{ background: mountedRef.current ? `${theme.accentCss}cc` : "#ffffff22", border: `2px solid ${mountedRef.current ? theme.accentCss : "#ffffff44"}`, touchAction: "manipulation" }}
+              onTouchStart={(e) => { e.preventDefault(); handleMount(); }}>🚗</button>
           </div>
         </>
       )}
