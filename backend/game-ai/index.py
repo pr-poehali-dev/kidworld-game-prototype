@@ -34,14 +34,14 @@ def handler(event: dict, context) -> dict:
             'body': json.dumps({'error': 'message is required'})
         }
 
-    api_key = os.environ.get('ANTHROPIC_API_KEY5', '')
+    api_key = os.environ.get('GROQ_API_KEY', '')
     if not api_key:
         return {
             'statusCode': 200,
             'headers': {'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json'},
             'body': json.dumps({
                 'commands': [],
-                'reply': 'Для работы ИИ нужен ANTHROPIC_API_KEY 🔑 Добавь его в секреты проекта!'
+                'reply': 'Для работы ИИ нужен GROQ_API_KEY 🔑 Добавь его в секреты проекта!'
             }, ensure_ascii=False)
         }
 
@@ -143,19 +143,20 @@ parts: [
 {"commands": [...], "reply": "Весёлый ответ с эмодзи!"}"""
 
     payload = {
-        'model': 'claude-3-5-haiku-20241022',
+        'model': 'llama-3.3-70b-versatile',
         'max_tokens': 3000,
-        'system': system_prompt,
-        'messages': [{'role': 'user', 'content': f'Стиль мира: {style}. Запрос: {message}'}]
+        'messages': [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': f'Стиль мира: {style}. Запрос: {message}'}
+        ]
     }
 
     req = urllib.request.Request(
-        'https://api.anthropic.com/v1/messages',
+        'https://api.groq.com/openai/v1/chat/completions',
         data=json.dumps(payload).encode('utf-8'),
         headers={
             'Content-Type': 'application/json',
-            'x-api-key': api_key,
-            'anthropic-version': '2023-06-01',
+            'Authorization': f'Bearer {api_key}',
         },
         method='POST'
     )
@@ -165,14 +166,14 @@ parts: [
             result = json.loads(response.read().decode('utf-8'))
     except urllib.error.HTTPError as e:
         error_body = e.read().decode('utf-8')
-        print(f"[API ERROR] status={e.code} key_prefix={api_key[:20]}... body={error_body}")
+        print(f"[GROQ ERROR] status={e.code} body={error_body}")
         return {
             'statusCode': 200,
             'headers': {'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json'},
             'body': json.dumps({'commands': [], 'reply': f'Ошибка API {e.code}: {error_body[:200]}'}, ensure_ascii=False)
         }
 
-    text = result['content'][0]['text'].strip()
+    text = result['choices'][0]['message']['content'].strip()
 
     # Убираем markdown-блоки если есть
     if '```' in text:
