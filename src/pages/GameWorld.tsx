@@ -338,6 +338,40 @@ export default function GameWorld() {
     setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
   };
 
+  // Локальный парсер — работает без API ключа
+  const localParse = (msg: string): { commands: GameCommand[]; reply: string } | null => {
+    const m = msg.toLowerCase();
+    // Враги
+    const enemyMatch = m.match(/(\d+)?\s*(робот|зомби|враг|монстр|пришелец|alien|robot|zombie|enemy)/);
+    if (m.includes("добав") && enemyMatch) {
+      const count = Math.min(parseInt(enemyMatch[1] || "1"), 5);
+      const type = m.includes("робот") || m.includes("robot") ? "robot"
+        : m.includes("зомби") || m.includes("zombie") ? "zombie"
+        : m.includes("пришелец") || m.includes("alien") ? "alien" : "robot";
+      return { commands: [{ action: "add_enemy", type, count }], reply: `Добавляю ${count} ${type === "robot" ? "роботов" : type === "zombie" ? "зомби" : "пришельцев"}! 🤖` };
+    }
+    // Деревья
+    if ((m.includes("добав") || m.includes("постав")) && (m.includes("дерев") || m.includes("tree"))) {
+      return { commands: [{ action: "add_object", type: "tree" }], reply: "Сажаю дерево! 🌳" };
+    }
+    // Кристалл / камень
+    if ((m.includes("добав") || m.includes("постав")) && (m.includes("кристалл") || m.includes("камен") || m.includes("ящик") || m.includes("chest"))) {
+      const type = m.includes("кристалл") ? "crystal" : "rock";
+      return { commands: [{ action: "add_object", type }], reply: `Ставлю ${type === "crystal" ? "кристалл" : "камень"}! ✨` };
+    }
+    // Оружие
+    if (m.includes("огонь") || m.includes("fire") || m.includes("пожар")) {
+      return { commands: [{ action: "change_weapon", effect: "fire_blue" }], reply: "Оружие в огне! 🔥" };
+    }
+    if (m.includes("лёд") || m.includes("лед") || m.includes("ice") || m.includes("заморозь")) {
+      return { commands: [{ action: "change_weapon", effect: "ice" }], reply: "Ледяное оружие! ❄️" };
+    }
+    if (m.includes("молни") || m.includes("lightning")) {
+      return { commands: [{ action: "change_weapon", effect: "lightning" }], reply: "Молниеносное оружие! ⚡" };
+    }
+    return null;
+  };
+
   const handleSendMessage = async (overrideMsg?: string) => {
     const msg = (overrideMsg ?? chatMessage).trim();
     if (!msg || isLoading) return;
@@ -345,17 +379,36 @@ export default function GameWorld() {
     setChatHistory((h) => [...h, { role: "user", text: msg }]);
     setIsLoading(true);
     scrollChatToBottom();
+
+    // Сначала пробуем локальный парсер (мгновенно)
+    const local = localParse(msg);
+    if (local) {
+      setTimeout(() => {
+        local.commands.forEach((cmd) => applyCommand(cmd));
+        setChatHistory((h) => [...h, { role: "ai", text: local.reply }]);
+        setIsLoading(false);
+        scrollChatToBottom();
+      }, 300);
+      return;
+    }
+
+    // Если не распознали — идём к Claude
     try {
       const res = await fetch("https://functions.poehali.dev/97def82a-1abb-45e6-9c01-a082dc689fa8", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: msg, style: themeKey, world_state: { enemies_count: enemyCount } }),
       });
       const data = await res.json();
-      const reply = data.reply || "Готово! 🎮";
-      setChatHistory((h) => [...h, { role: "ai", text: reply }]);
-      if (data.commands) data.commands.forEach((cmd: GameCommand) => applyCommand(cmd));
+      if (data.errorMessage || res.status >= 400) {
+        // API ключ не настроен — используем заглушку
+        setChatHistory((h) => [...h, { role: "ai", text: "Попробуй команды: «добавь 3 робота», «поставь дерево», «огненное оружие» 🎮" }]);
+      } else {
+        const reply = data.reply || "Готово! 🎮";
+        setChatHistory((h) => [...h, { role: "ai", text: reply }]);
+        if (data.commands) data.commands.forEach((cmd: GameCommand) => applyCommand(cmd));
+      }
     } catch {
-      setChatHistory((h) => [...h, { role: "ai", text: "Что-то пошло не так, попробуй ещё раз! 🤖" }]);
+      setChatHistory((h) => [...h, { role: "ai", text: "Попробуй: «добавь роботов», «поставь дерево», «огненное оружие» 🎮" }]);
     } finally {
       setIsLoading(false);
       scrollChatToBottom();
