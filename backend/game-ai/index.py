@@ -122,11 +122,26 @@ def handler(event: dict, context) -> dict:
         }
 
     text = result['result']['alternatives'][0]['message']['text'].strip()
+    print(f"[YANDEX RESPONSE] {text[:500]}")
 
     if '```' in text:
         text = re.sub(r'```(?:json)?\s*', '', text).strip()
 
-    parsed = json.loads(text)
+    # Убираем всё до первой { и после последней }
+    start = text.find('{')
+    end = text.rfind('}')
+    if start != -1 and end != -1:
+        text = text[start:end+1]
+
+    try:
+        parsed = json.loads(text)
+    except Exception as e:
+        print(f"[PARSE ERROR] {e} text={text[:300]}")
+        return {
+            'statusCode': 200,
+            'headers': {'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json'},
+            'body': json.dumps({'commands': [], 'reply': f'ИИ вернул неверный формат 😔 Попробуй ещё раз!'}, ensure_ascii=False)
+        }
     commands = parsed.get('commands', [])
     reply = parsed.get('reply', 'Готово! 🎮')
 
