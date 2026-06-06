@@ -120,6 +120,13 @@ export default function GameWorld() {
   const mountedRef = useRef<MountableObj | null>(null);
   const [mountHint, setMountHint] = useState<string | null>(null);
 
+  const [placementMode, setPlacementMode] = useState<{ cmd: GameCommand; scale: number } | null>(null);
+  const placementModeRef = useRef<{ cmd: GameCommand; scale: number } | null>(null);
+  const ghostRef = useRef<THREE.Group | null>(null);
+  const raycasterRef = useRef(new THREE.Raycaster());
+  const floorPlaneRef = useRef(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0));
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+
   const [enemyCount, setEnemyCount] = useState(3);
   const [chatMessage, setChatMessage] = useState("");
   const [chatHistory, setChatHistory] = useState<{ role: "user" | "ai"; text: string }[]>([
@@ -186,30 +193,21 @@ export default function GameWorld() {
       for (let i = 0; i < count; i++) spawnEnemy(scene);
     }
 
-    // Процедурная генерация произвольного объекта по спецификации от ИИ
+    // Процедурная генерация произвольного объекта по спецификации от ИИ — входим в режим размещения
     if (cmd.action === "proc_build" && cmd.parts && cmd.parts.length > 0) {
-      const copies = Math.min(cmd.count || 1, 6);
-      for (let c = 0; c < copies; c++) {
-        const obj = buildFromSpec(cmd.parts);
-        // Размещаем рядом с игроком — но не прямо на нём
-        const angle = (c / copies) * Math.PI * 2;
-        const dist = 5 + Math.random() * 8;
-        const px = playerPosRef.current.x + Math.sin(angle) * dist;
-        const pz = playerPosRef.current.z + Math.cos(angle) * dist;
-        obj.position.set(px, 0, pz);
-        scene.add(obj);
-
-        if (cmd.mountable) {
-          const mo: MountableObj = {
-            mesh: obj,
-            speed: cmd.speed ?? 8,
-            mountOffset: new THREE.Vector3(...(cmd.mount_offset ?? [0, 1.2, 0])),
-          };
-          mountablesRef.current.push(mo);
-          setMountHint(`Подойди к ${cmd.name ?? "объекту"} и нажми E / кнопку`);
-          setTimeout(() => setMountHint(null), 4000);
+      setPlacementMode({ cmd, scale: 1.0 });
+      // Создаём призрак (ghost) объект — полупрозрачный белый
+      if (ghostRef.current) scene.remove(ghostRef.current);
+      const ghost = buildFromSpec(cmd.parts);
+      ghost.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.material = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, wireframe: false });
         }
-      }
+      });
+      ghost.position.set(playerPosRef.current.x, 0, playerPosRef.current.z - 5);
+      scene.add(ghost);
+      ghostRef.current = ghost;
+      return; // не добавляем сразу
     }
 
     // Старый add_object — оставляем для совместимости
@@ -255,6 +253,7 @@ export default function GameWorld() {
 
     const camera = new THREE.PerspectiveCamera(65, mount.clientWidth / mount.clientHeight, 0.1, 200);
     camera.position.set(0, 4, 10);
+    cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
     renderer.setSize(mount.clientWidth, mount.clientHeight);
@@ -430,14 +429,93 @@ export default function GameWorld() {
       if (e.code === "KeyS") k.s = false; if (e.code === "KeyD") k.d = false;
       if (e.code === "Space") k.space = false;
     };
-    const onClick = (e: MouseEvent) => { if ((e.target as HTMLElement).tagName === "CANVAS") triggerAttack(); };
+    const getCanvasNDC = (clientX: number, clientY: number) => {
+      const canvas = mountRef.current;
+      if (!canvas) return null;
+      const rect = canvas.getBoundingClientRect();
+      return new THREE.Vector2(
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -((clientY - rect.top) / rect.height) * 2 + 1
+      );
+    };
+
+    const getRayFloorHit = (ndc: THREE.Vector2): THREE.Vector3 | null => {
+      if (!cameraRef.current) return null;
+      raycasterRef.current.setFromCamera(ndc, cameraRef.current);
+      const target = new THREE.Vector3();
+      const hit = raycasterRef.current.ray.intersectPlane(floorPlaneRef.current, target);
+      return hit ? target : null;
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (!ghostRef.current || !cameraRef.current) return;
+      const ndc = getCanvasNDC(e.clientX, e.clientY);
+      if (!ndc) return;
+      const target = getRayFloorHit(ndc);
+      if (target) ghostRef.current.position.set(target.x, 0, target.z);
+    };
+
+    const onClickPlace = (e: MouseEvent) => {
+      if (!placementModeRef.current || !cameraRef.current) return;
+      if ((e.target as HTMLElement).tagName !== "CANVAS") return;
+      const ndc = getCanvasNDC(e.clientX, e.clientY);
+      if (!ndc) return;
+      const target = getRayFloorHit(ndc);
+      if (target) confirmPlacement(target, placementModeRef.current.scale);
+    };
+
+    const onTouchMovePlacement = (e: TouchEvent) => {
+      if (!ghostRef.current || !cameraRef.current) return;
+      const t = e.touches[0];
+      if (!t) return;
+      const ndc = getCanvasNDC(t.clientX, t.clientY);
+      if (!ndc) return;
+      const target = getRayFloorHit(ndc);
+      if (target) ghostRef.current.position.set(target.x, 0, target.z);
+    };
+
+    const onTouchEndPlacement = (e: TouchEvent) => {
+      if (!placementModeRef.current || !cameraRef.current) return;
+      if ((e.target as HTMLElement).tagName !== "CANVAS") return;
+      const t = e.changedTouches[0];
+      if (!t) return;
+      const ndc = getCanvasNDC(t.clientX, t.clientY);
+      if (!ndc) return;
+      const target = getRayFloorHit(ndc);
+      if (target) confirmPlacement(target, placementModeRef.current.scale);
+    };
+
+    const onClick = (e: MouseEvent) => {
+      // В режиме размещения клик обрабатывается через onClickPlace
+      if (placementModeRef.current) return;
+      if ((e.target as HTMLElement).tagName === "CANVAS") triggerAttack();
+    };
+
+    const canvas = mountRef.current;
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("click", onClick);
-    return () => { window.removeEventListener("keydown", onKeyDown); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("click", onClick); };
-  }, [triggerAttack]);
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("click", onClickPlace);
+    if (canvas) {
+      canvas.addEventListener("touchmove", onTouchMovePlacement, { passive: true });
+      canvas.addEventListener("touchend", onTouchEndPlacement);
+    }
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("click", onClick);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("click", onClickPlace);
+      if (canvas) {
+        canvas.removeEventListener("touchmove", onTouchMovePlacement);
+        canvas.removeEventListener("touchend", onTouchEndPlacement);
+      }
+    };
+  }, [triggerAttack, confirmPlacement]);
 
   useEffect(() => { joystickRef.current = joystick; }, [joystick]);
+  useEffect(() => { placementModeRef.current = placementMode; }, [placementMode]);
 
   const handleMount = useCallback(() => {
     if (mountedRef.current) {
@@ -458,6 +536,34 @@ export default function GameWorld() {
       mountedRef.current = nearest;
       setMountHint(null);
     }
+  }, []);
+
+  const confirmPlacement = useCallback((position: THREE.Vector3, scale: number) => {
+    const scene = sceneRef.current;
+    const mode = placementModeRef.current;
+    if (!scene || !mode || !mode.cmd.parts) return;
+
+    // Убираем призрак
+    if (ghostRef.current) { scene.remove(ghostRef.current); ghostRef.current = null; }
+
+    const cmd = mode.cmd;
+    const copies = Math.min(cmd.count || 1, 6);
+    for (let c = 0; c < copies; c++) {
+      const obj = buildFromSpec(cmd.parts!);
+      const angle = (c / copies) * Math.PI * 2;
+      const offset = copies > 1 ? 3 : 0;
+      obj.position.set(position.x + Math.sin(angle) * offset, 0, position.z + Math.cos(angle) * offset);
+      obj.scale.setScalar(scale);
+      scene.add(obj);
+      if (cmd.mountable) {
+        mountablesRef.current.push({
+          mesh: obj,
+          speed: cmd.speed ?? 8,
+          mountOffset: new THREE.Vector3(...(cmd.mount_offset ?? [0, 1.2, 0])).multiplyScalar(scale),
+        });
+      }
+    }
+    setPlacementMode(null);
   }, []);
 
   const scrollChatToBottom = () => {
@@ -676,6 +782,37 @@ export default function GameWorld() {
           </button>
         </div>
       </div>
+
+      {/* Placement mode panel */}
+      {placementMode && (
+        <div className="absolute bottom-20 left-1/2 z-30 flex flex-col items-center gap-3 px-4 py-3 rounded-2xl"
+          style={{ transform: "translateX(-50%)", background: "#000000dd", border: "1px solid #ffffff33", backdropFilter: "blur(12px)", minWidth: "280px" }}>
+          <div className="font-rubik text-white text-sm">
+            📍 Кликни на поле чтобы поставить <b>{placementMode.cmd.name}</b>
+          </div>
+          <div className="flex items-center gap-3 w-full">
+            <span className="font-rubik text-gray-400 text-xs">Размер</span>
+            <input type="range" min="0.3" max="5" step="0.1"
+              value={placementMode.scale}
+              onChange={(e) => {
+                const s = parseFloat(e.target.value);
+                setPlacementMode(p => p ? { ...p, scale: s } : null);
+                if (ghostRef.current) ghostRef.current.scale.setScalar(s);
+              }}
+              className="flex-1 accent-white" />
+            <span className="font-rubik text-white text-xs w-8">{placementMode.scale.toFixed(1)}x</span>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => {
+              if (ghostRef.current && sceneRef.current) sceneRef.current.remove(ghostRef.current);
+              ghostRef.current = null;
+              setPlacementMode(null);
+            }} className="px-3 py-1 rounded-lg font-rubik text-sm" style={{ background: "#ffffff22", color: "#fff" }}>
+              Отмена
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* CRT overlay */}
       <div className="pointer-events-none fixed inset-0 z-30 opacity-[0.025]"
