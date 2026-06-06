@@ -183,6 +183,34 @@ export default function GameWorld() {
     setEnemyCount(surviving.length);
   }, []);
 
+  const confirmPlacement = useCallback((position: THREE.Vector3, scale: number) => {
+    const scene = sceneRef.current;
+    const mode = placementModeRef.current;
+    if (!scene || !mode || !mode.cmd.parts) return;
+
+    // Убираем призрак
+    if (ghostRef.current) { scene.remove(ghostRef.current); ghostRef.current = null; }
+
+    const cmd = mode.cmd;
+    const copies = Math.min(cmd.count || 1, 6);
+    for (let c = 0; c < copies; c++) {
+      const obj = buildFromSpec(cmd.parts!);
+      const angle = (c / copies) * Math.PI * 2;
+      const offset = copies > 1 ? 3 : 0;
+      obj.position.set(position.x + Math.sin(angle) * offset, 0, position.z + Math.cos(angle) * offset);
+      obj.scale.setScalar(scale);
+      scene.add(obj);
+      if (cmd.mountable) {
+        mountablesRef.current.push({
+          mesh: obj,
+          speed: cmd.speed ?? 8,
+          mountOffset: new THREE.Vector3(...(cmd.mount_offset ?? [0, 1.2, 0])).multiplyScalar(scale),
+        });
+      }
+    }
+    setPlacementMode(null);
+  }, []);
+
   const applyCommand = useCallback((cmd: GameCommand) => {
     const scene = sceneRef.current;
     if (!scene) return;
@@ -536,34 +564,6 @@ export default function GameWorld() {
       mountedRef.current = nearest;
       setMountHint(null);
     }
-  }, []);
-
-  const confirmPlacement = useCallback((position: THREE.Vector3, scale: number) => {
-    const scene = sceneRef.current;
-    const mode = placementModeRef.current;
-    if (!scene || !mode || !mode.cmd.parts) return;
-
-    // Убираем призрак
-    if (ghostRef.current) { scene.remove(ghostRef.current); ghostRef.current = null; }
-
-    const cmd = mode.cmd;
-    const copies = Math.min(cmd.count || 1, 6);
-    for (let c = 0; c < copies; c++) {
-      const obj = buildFromSpec(cmd.parts!);
-      const angle = (c / copies) * Math.PI * 2;
-      const offset = copies > 1 ? 3 : 0;
-      obj.position.set(position.x + Math.sin(angle) * offset, 0, position.z + Math.cos(angle) * offset);
-      obj.scale.setScalar(scale);
-      scene.add(obj);
-      if (cmd.mountable) {
-        mountablesRef.current.push({
-          mesh: obj,
-          speed: cmd.speed ?? 8,
-          mountOffset: new THREE.Vector3(...(cmd.mount_offset ?? [0, 1.2, 0])).multiplyScalar(scale),
-        });
-      }
-    }
-    setPlacementMode(null);
   }, []);
 
   const scrollChatToBottom = () => {
