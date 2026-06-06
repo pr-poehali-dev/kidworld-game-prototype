@@ -1,6 +1,7 @@
 import json
 import os
 import urllib.request
+import re
 
 
 def handler(event: dict, context) -> dict:
@@ -165,7 +166,6 @@ parts: [
 
     # Убираем markdown-блоки если есть
     if '```' in text:
-        import re
         text = re.sub(r'```(?:json)?\s*', '', text).strip()
 
     parsed = json.loads(text)
