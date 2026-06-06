@@ -63,9 +63,9 @@ export default function Index() {
 
         {/* Style previews */}
         <div className="grid grid-cols-2 gap-3 w-full max-w-xs">
-          {STYLES.map((s, i) => (
-            <div key={s.id} className="rounded-lg overflow-hidden cursor-pointer group"
-              style={{ border: `1px solid ${s.color}44`, background: s.bg, animationDelay: `${i * 0.1}s`, animation: "fade-in 0.5s ease-out forwards", opacity: 0 }}
+          {STYLES.map((s) => (
+            <div key={s.id} className="rounded-lg overflow-hidden cursor-pointer"
+              style={{ border: `1px solid ${s.color}66`, background: s.bg }}
               onClick={() => navigate(`/game/${s.id}`)}>
               <div className="p-3 flex items-center gap-2">
                 <span className="text-xl">{s.emoji}</span>

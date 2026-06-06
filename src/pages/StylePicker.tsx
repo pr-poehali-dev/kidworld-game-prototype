@@ -181,11 +181,7 @@ export default function StylePicker() {
               <div
                 key={style.id}
                 className="group relative cursor-pointer"
-                style={{
-                  animationDelay: `${idx * 0.1}s`,
-                  animation: "fade-in 0.5s ease-out forwards",
-                  opacity: 0,
-                }}
+                style={{ opacity: 1 }}
                 onMouseEnter={() => setHovered(style.id)}
                 onMouseLeave={() => setHovered(null)}
                 onClick={() => handlePlay(style.id)}
