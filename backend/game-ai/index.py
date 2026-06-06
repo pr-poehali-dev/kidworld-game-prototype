@@ -34,7 +34,8 @@ def handler(event: dict, context) -> dict:
             'body': json.dumps({'error': 'message is required'})
         }
 
-    api_key = os.environ.get('GROQ_API_KEY', '')
+    api_key = os.environ.get('GROQ_API_KEY', '').strip()
+    print(f"[DEBUG] key_len={len(api_key)} key_start={api_key[:8] if api_key else 'EMPTY'}")
     if not api_key:
         return {
             'statusCode': 200,
