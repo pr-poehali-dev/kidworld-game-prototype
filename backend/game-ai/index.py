@@ -34,7 +34,7 @@ def handler(event: dict, context) -> dict:
         }
 
     api_key = os.environ.get('YANDEX_API_KEY', '').strip()
-    folder_id = os.environ.get('YANDEX_FOLDER_ID', '').strip()
+    folder_id = 'b1gjba9i0pl1bbv5k52j'
 
     if not api_key or not folder_id:
         return {
