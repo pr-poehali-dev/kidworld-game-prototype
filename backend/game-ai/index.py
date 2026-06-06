@@ -159,8 +159,17 @@ parts: [
         method='POST'
     )
 
-    with urllib.request.urlopen(req, timeout=28) as response:
-        result = json.loads(response.read().decode('utf-8'))
+    try:
+        with urllib.request.urlopen(req, timeout=28) as response:
+            result = json.loads(response.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode('utf-8')
+        print(f"[API ERROR] status={e.code} key_prefix={api_key[:20]}... body={error_body}")
+        return {
+            'statusCode': 200,
+            'headers': {'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json'},
+            'body': json.dumps({'commands': [], 'reply': f'Ошибка API {e.code}: {error_body[:200]}'}, ensure_ascii=False)
+        }
 
     text = result['content'][0]['text'].strip()
 
