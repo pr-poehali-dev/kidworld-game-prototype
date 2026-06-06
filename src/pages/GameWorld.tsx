@@ -74,8 +74,13 @@ export default function GameWorld() {
 
   const [enemyCount, setEnemyCount] = useState(3);
   const [chatMessage, setChatMessage] = useState("");
-  const [aiReply, setAiReply] = useState("Напиши что добавить в мир 🎮");
+  const [chatHistory, setChatHistory] = useState<{ role: "user" | "ai"; text: string }[]>([
+    { role: "ai", text: "Привет! Я могу менять твой мир 🎮 Попробуй: «добавь роботов» или «поставь дерево»!" }
+  ]);
   const [isLoading, setIsLoading] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
   const [joystick, setJoystick] = useState({ dx: 0, dy: 0, active: false });
   const joystickOrigin = useRef({ x: 0, y: 0 });
   const joystickTouchId = useRef<number | null>(null);
@@ -329,20 +334,54 @@ export default function GameWorld() {
 
   useEffect(() => { joystickRef.current = joystick; }, [joystick]);
 
-  const handleSendMessage = async () => {
-    if (!chatMessage.trim() || isLoading) return;
-    const msg = chatMessage.trim();
-    setChatMessage(""); setIsLoading(true); setAiReply("Думаю...");
+  const scrollChatToBottom = () => {
+    setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+  };
+
+  const handleSendMessage = async (overrideMsg?: string) => {
+    const msg = (overrideMsg ?? chatMessage).trim();
+    if (!msg || isLoading) return;
+    setChatMessage("");
+    setChatHistory((h) => [...h, { role: "user", text: msg }]);
+    setIsLoading(true);
+    scrollChatToBottom();
     try {
       const res = await fetch("https://functions.poehali.dev/97def82a-1abb-45e6-9c01-a082dc689fa8", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: msg, style: themeKey, world_state: { enemies_count: enemyCount } }),
       });
       const data = await res.json();
-      setAiReply(data.reply || "Готово!");
+      const reply = data.reply || "Готово! 🎮";
+      setChatHistory((h) => [...h, { role: "ai", text: reply }]);
       if (data.commands) data.commands.forEach((cmd: GameCommand) => applyCommand(cmd));
-    } catch { setAiReply("Что-то пошло не так 🤖"); }
-    finally { setIsLoading(false); }
+    } catch {
+      setChatHistory((h) => [...h, { role: "ai", text: "Что-то пошло не так, попробуй ещё раз! 🤖" }]);
+    } finally {
+      setIsLoading(false);
+      scrollChatToBottom();
+    }
+  };
+
+  const handleVoice = () => {
+    const SR = (window as unknown as { webkitSpeechRecognition?: new () => SpeechRecognition }).webkitSpeechRecognition
+      || (window as unknown as { SpeechRecognition?: new () => SpeechRecognition }).SpeechRecognition;
+    if (!SR) {
+      setChatHistory((h) => [...h, { role: "ai", text: "Голосовой ввод не поддерживается в этом браузере 😔" }]);
+      return;
+    }
+    const recognition = new SR();
+    recognition.lang = "ru-RU";
+    recognition.interimResults = false;
+    setIsListening(true);
+    recognition.onresult = (e: SpeechRecognitionEvent) => {
+      const text = e.results[0][0].transcript;
+      setChatMessage(text);
+      setIsListening(false);
+      handleSendMessage(text);
+    };
+    recognition.onerror = () => setIsListening(false);
+    recognition.onend = () => setIsListening(false);
+    recognition.start();
   };
 
   const handleJoystickStart = (e: React.TouchEvent) => {
@@ -393,18 +432,20 @@ export default function GameWorld() {
         </div>
       )}
 
-      {/* Mobile controls */}
+      {/* Mobile controls — над чатом */}
       {isMobile && (
         <>
-          <div className="absolute bottom-24 left-6 z-10 w-24 h-24 rounded-full flex items-center justify-center select-none"
-            style={{ background: "#00000066", border: `2px solid ${theme.accentCss}55`, backdropFilter: "blur(4px)", touchAction: "none" }}
+          <div className="absolute z-10 w-24 h-24 rounded-full flex items-center justify-center select-none"
+            style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 80px)", left: "24px",
+              background: "#00000066", border: `2px solid ${theme.accentCss}55`, backdropFilter: "blur(4px)", touchAction: "none" }}
             onTouchStart={handleJoystickStart} onTouchMove={handleJoystickMove} onTouchEnd={handleJoystickEnd}>
             <div className="w-10 h-10 rounded-full"
               style={{ background: theme.accentCss, opacity: 0.85,
                 transform: joystick.active ? `translate(${joystick.dx * 16}px, ${joystick.dy * 16}px)` : "none",
                 transition: joystick.active ? "none" : "transform 0.15s ease" }} />
           </div>
-          <div className="absolute bottom-24 right-6 z-10 flex flex-col gap-2 items-end">
+          <div className="absolute z-10 flex flex-col gap-2 items-end"
+            style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 80px)", right: "24px" }}>
             <button className="w-16 h-16 rounded-full text-2xl flex items-center justify-center select-none"
               style={{ background: `${theme.accentCss}cc`, border: `2px solid ${theme.accentCss}`, touchAction: "manipulation" }}
               onTouchStart={(e) => { e.preventDefault(); triggerAttack(); }}>⚔️</button>
@@ -415,21 +456,87 @@ export default function GameWorld() {
         </>
       )}
 
-      {/* AI Chat bar */}
-      <div className="absolute bottom-0 left-0 right-0 z-20 flex items-center gap-2 px-3"
-        style={{ height: "60px", background: "#000000ee", borderTop: `2px solid ${theme.accentCss}44`, backdropFilter: "blur(8px)" }}>
-        <div className="w-8 h-8 rounded flex-shrink-0 flex items-center justify-center text-base" style={{ background: theme.accentCss }}>🤖</div>
-        <div className="hidden md:block text-[10px] font-rubik px-2 flex-shrink-0 max-w-[220px] truncate" style={{ color: theme.accentCss }}>{aiReply}</div>
-        <input className="flex-1 bg-transparent outline-none font-rubik text-sm text-white placeholder-gray-500"
-          placeholder="Напиши что добавить в мир..."
-          value={chatMessage} onChange={(e) => setChatMessage(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSendMessage()} />
-        <button onClick={handleSendMessage} disabled={isLoading || !chatMessage.trim()}
-          className="px-3 py-1.5 rounded font-pixel text-[8px] flex-shrink-0"
-          style={{ background: chatMessage.trim() && !isLoading ? theme.accentCss : "#333",
-            color: chatMessage.trim() && !isLoading ? "#000" : "#666", border: `1px solid ${theme.accentCss}44` }}>
-          {isLoading ? "..." : "▶"}
-        </button>
+      {/* AI Chat — раскрывающееся окно + строка ввода */}
+      <div className="absolute left-0 right-0 z-20 flex flex-col"
+        style={{ bottom: 0, paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
+
+        {/* История сообщений (видна когда chatOpen) */}
+        {chatOpen && (
+          <div className="mx-2 mb-1 rounded-xl overflow-hidden flex flex-col"
+            style={{ background: "#000000cc", border: `1px solid ${theme.accentCss}44`, backdropFilter: "blur(12px)", maxHeight: "220px" }}>
+            <div className="flex items-center justify-between px-3 py-2 border-b" style={{ borderColor: `${theme.accentCss}33` }}>
+              <span className="font-pixel text-[7px]" style={{ color: theme.accentCss }}>🤖 ИИ АССИСТЕНТ</span>
+              <button onClick={() => setChatOpen(false)} className="text-gray-400 hover:text-white text-xs leading-none">✕</button>
+            </div>
+            <div className="overflow-y-auto flex-1 px-3 py-2 flex flex-col gap-2" style={{ maxHeight: "160px" }}>
+              {chatHistory.map((msg, i) => (
+                <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div className="font-rubik text-xs px-3 py-1.5 rounded-xl max-w-[80%]"
+                    style={msg.role === "user"
+                      ? { background: theme.accentCss, color: "#000" }
+                      : { background: "#ffffff15", color: "#fff", border: `1px solid ${theme.accentCss}33` }}>
+                    {msg.text}
+                  </div>
+                </div>
+              ))}
+              {isLoading && (
+                <div className="flex justify-start">
+                  <div className="font-rubik text-xs px-3 py-1.5 rounded-xl" style={{ background: "#ffffff15", color: "#ffffff88" }}>
+                    <span className="animate-pulse">думаю...</span>
+                  </div>
+                </div>
+              )}
+              <div ref={chatEndRef} />
+            </div>
+          </div>
+        )}
+
+        {/* Строка ввода — всегда видна */}
+        <div className="flex items-center gap-2 px-3 mx-0"
+          style={{ height: "60px", background: "#000000ee", borderTop: `2px solid ${theme.accentCss}55` }}>
+          {/* Кнопка открыть чат */}
+          <button
+            onClick={() => setChatOpen((o) => !o)}
+            className="w-9 h-9 rounded-lg flex-shrink-0 flex items-center justify-center text-base relative"
+            style={{ background: chatOpen ? theme.accentCss : "#ffffff15", border: `1px solid ${theme.accentCss}66` }}>
+            🤖
+            {!chatOpen && chatHistory.length > 1 && (
+              <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full font-pixel text-[7px] flex items-center justify-center"
+                style={{ background: theme.accentCss, color: "#000" }}>
+                {chatHistory.length}
+              </span>
+            )}
+          </button>
+
+          <input
+            className="flex-1 outline-none font-rubik text-sm text-white placeholder-gray-500 rounded-lg px-3 py-2"
+            style={{ background: "#ffffff10", border: `1px solid ${theme.accentCss}33` }}
+            placeholder="Добавь роботов, поставь дерево..."
+            value={chatMessage}
+            onChange={(e) => setChatMessage(e.target.value)}
+            onFocus={() => setChatOpen(true)}
+            onKeyDown={(e) => e.key === "Enter" && handleSendMessage()} />
+
+          {/* Микрофон */}
+          <button
+            onClick={handleVoice}
+            className="w-9 h-9 rounded-lg flex-shrink-0 flex items-center justify-center text-base"
+            style={{ background: isListening ? "#ff4444" : "#ffffff15", border: `1px solid ${isListening ? "#ff4444" : "#ffffff33"}`,
+              animation: isListening ? "pulse 1s infinite" : "none" }}>
+            <Icon name="Mic" size={16} className={isListening ? "text-white" : "text-gray-400"} />
+          </button>
+
+          {/* Отправить */}
+          <button
+            onClick={() => handleSendMessage()}
+            disabled={isLoading || !chatMessage.trim()}
+            className="w-9 h-9 rounded-lg flex-shrink-0 flex items-center justify-center font-pixel text-[10px]"
+            style={{ background: chatMessage.trim() && !isLoading ? theme.accentCss : "#333",
+              color: chatMessage.trim() && !isLoading ? "#000" : "#555",
+              border: `1px solid ${theme.accentCss}44` }}>
+            {isLoading ? "…" : "▶"}
+          </button>
+        </div>
       </div>
 
       {/* CRT overlay */}
