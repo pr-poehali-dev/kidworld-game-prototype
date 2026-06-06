@@ -629,15 +629,7 @@ export default function GameWorld() {
     setAiReply("Думаю...");
 
     try {
-      const func2urlModule = await import("../../func2url.json").catch(() => ({ default: {} }));
-      const urls = func2urlModule.default as Record<string, string>;
-      const url = urls["game-ai"] || "";
-
-      if (!url) {
-        setAiReply("Бэкенд ещё не подключён — скоро всё заработает! 🚀");
-        setIsLoading(false);
-        return;
-      }
+      const url = "https://functions.poehali.dev/97def82a-1abb-45e6-9c01-a082dc689fa8";
 
       const res = await fetch(url, {
         method: "POST",
