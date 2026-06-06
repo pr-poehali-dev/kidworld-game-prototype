@@ -114,8 +114,14 @@ export default function GameWorld() {
   const attackTimerRef = useRef(0);
   const enemiesRef = useRef<EnemyObj[]>([]);
   const rafRef = useRef<number>(0);
-  const keysRef = useRef({ w: false, a: false, s: false, d: false, space: false });
+  const keysRef = useRef({ w: false, a: false, s: false, d: false, space: false, q: false, e2: false });
   const joystickRef = useRef({ dx: 0, dy: 0, active: false });
+  const camYawRef = useRef(0); // угол камеры вокруг игрока
+  const camPitchRef = useRef(0.45); // наклон камеры
+  const camDist = 9;
+  const isDraggingCamRef = useRef(false);
+  const lastMouseRef = useRef({ x: 0, y: 0 });
+  const collidersRef = useRef<THREE.Box3[]>([]); // коллизии объектов
   const mountablesRef = useRef<MountableObj[]>([]);
   const mountedRef = useRef<MountableObj | null>(null);
   const [mountHint, setMountHint] = useState<string | null>(null);
@@ -200,6 +206,11 @@ export default function GameWorld() {
       obj.position.set(position.x + Math.sin(angle) * offset, 0, position.z + Math.cos(angle) * offset);
       obj.scale.setScalar(scale);
       scene.add(obj);
+      // Коллайдер после добавления в сцену
+      setTimeout(() => {
+        const box = new THREE.Box3().setFromObject(obj);
+        if (!box.isEmpty()) collidersRef.current.push(box);
+      }, 100);
       if (cmd.mountable) {
         mountablesRef.current.push({
           mesh: obj,
@@ -353,28 +364,50 @@ export default function GameWorld() {
       const k = keysRef.current;
       const j = joystickRef.current;
 
+      // Поворот камеры клавишами Q/E (на ПК)
+      if (k.q) camYawRef.current -= 1.5 * delta;
+      if (k.e2) camYawRef.current += 1.5 * delta;
+
+      // Движение относительно направления камеры
+      const yaw = camYawRef.current;
+      const forward = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+      const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
       moveDir.set(0, 0, 0);
-      if (k.w || (j.active && j.dy < -0.3)) moveDir.z -= 1;
-      if (k.s || (j.active && j.dy > 0.3)) moveDir.z += 1;
-      if (k.a || (j.active && j.dx < -0.3)) moveDir.x -= 1;
-      if (k.d || (j.active && j.dx > 0.3)) moveDir.x += 1;
+      if (k.w || (j.active && j.dy < -0.3)) moveDir.addScaledVector(forward, 1);
+      if (k.s || (j.active && j.dy > 0.3)) moveDir.addScaledVector(forward, -1);
+      if (k.a || (j.active && j.dx < -0.3)) moveDir.addScaledVector(right, -1);
+      if (k.d || (j.active && j.dx > 0.3)) moveDir.addScaledVector(right, 1);
       if (moveDir.length() > 0) { moveDir.normalize(); playerRotRef.current = Math.atan2(moveDir.x, moveDir.z); }
 
       const mounted = mountedRef.current;
       if (mounted) {
-        // Едем на транспорте
         const spd = mounted.speed;
         mounted.mesh.position.x += moveDir.x * spd * delta;
         mounted.mesh.position.z += moveDir.z * spd * delta;
         mounted.mesh.position.x = Math.max(-24, Math.min(24, mounted.mesh.position.x));
         mounted.mesh.position.z = Math.max(-24, Math.min(24, mounted.mesh.position.z));
         if (moveDir.length() > 0) mounted.mesh.rotation.y = playerRotRef.current;
-        // Игрок едет вместе
         playerPosRef.current.copy(mounted.mesh.position).add(mounted.mountOffset);
       } else {
-        // Пешком
-        playerVelRef.current.x = moveDir.x * 5;
-        playerVelRef.current.z = moveDir.z * 5;
+        // Пешком — с коллизиями
+        const spd = 5;
+        const nextX = playerPosRef.current.x + moveDir.x * spd * delta;
+        const nextZ = playerPosRef.current.z + moveDir.z * spd * delta;
+        const pBox = new THREE.Box3(
+          new THREE.Vector3(nextX - 0.3, playerPosRef.current.y - 0.8, nextZ - 0.3),
+          new THREE.Vector3(nextX + 0.3, playerPosRef.current.y + 1.2, nextZ + 0.3)
+        );
+        let blocked = false;
+        for (const col of collidersRef.current) {
+          if (col.intersectsBox(pBox)) { blocked = true; break; }
+        }
+        if (!blocked) {
+          playerVelRef.current.x = moveDir.x * spd;
+          playerVelRef.current.z = moveDir.z * spd;
+        } else {
+          playerVelRef.current.x = 0;
+          playerVelRef.current.z = 0;
+        }
         if (k.space && onGroundRef.current) { playerVelRef.current.y = 8; onGroundRef.current = false; k.space = false; }
         playerVelRef.current.y -= 20 * delta;
         playerPosRef.current.addScaledVector(playerVelRef.current, delta);
@@ -393,8 +426,12 @@ export default function GameWorld() {
         }
       }
 
-      camTarget.set(playerPosRef.current.x, playerPosRef.current.y + 3, playerPosRef.current.z + 8);
-      camera.position.lerp(camTarget, 0.08);
+      // Камера вращается вокруг игрока
+      const camX = playerPosRef.current.x + Math.sin(camYawRef.current) * camDist * Math.cos(camPitchRef.current);
+      const camY = playerPosRef.current.y + Math.sin(camPitchRef.current) * camDist + 2;
+      const camZ = playerPosRef.current.z + Math.cos(camYawRef.current) * camDist * Math.cos(camPitchRef.current);
+      camTarget.set(camX, camY, camZ);
+      camera.position.lerp(camTarget, 0.1);
       camera.lookAt(playerPosRef.current.x, playerPosRef.current.y + 1, playerPosRef.current.z);
 
       // Enemies
@@ -449,6 +486,8 @@ export default function GameWorld() {
       if (e.code === "KeyD") k.d = true;
       if (e.code === "Space") { e.preventDefault(); k.space = true; }
       if (e.code === "KeyE") handleMount();
+      if (e.code === "KeyQ") k.q = true;
+      if (e.code === "KeyR") k.e2 = true;
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (isTyping()) return;
@@ -456,6 +495,8 @@ export default function GameWorld() {
       if (e.code === "KeyW") k.w = false; if (e.code === "KeyA") k.a = false;
       if (e.code === "KeyS") k.s = false; if (e.code === "KeyD") k.d = false;
       if (e.code === "Space") k.space = false;
+      if (e.code === "KeyQ") k.q = false;
+      if (e.code === "KeyR") k.e2 = false;
     };
     const getCanvasNDC = (clientX: number, clientY: number) => {
       const canvas = mountRef.current;
@@ -514,9 +555,50 @@ export default function GameWorld() {
     };
 
     const onClick = (e: MouseEvent) => {
-      // В режиме размещения клик обрабатывается через onClickPlace
       if (placementModeRef.current) return;
       if ((e.target as HTMLElement).tagName === "CANVAS") triggerAttack();
+    };
+
+    // Вращение камеры мышью (ПК) — правая кнопка или просто drag по канвасу
+    const onMouseDown = (e: MouseEvent) => {
+      if ((e.target as HTMLElement).tagName !== "CANVAS") return;
+      if (placementModeRef.current) return;
+      isDraggingCamRef.current = true;
+      lastMouseRef.current = { x: e.clientX, y: e.clientY };
+    };
+    const onMouseDrag = (e: MouseEvent) => {
+      if (!isDraggingCamRef.current) return;
+      const dx = e.clientX - lastMouseRef.current.x;
+      const dy = e.clientY - lastMouseRef.current.y;
+      camYawRef.current -= dx * 0.005;
+      camPitchRef.current = Math.max(0.1, Math.min(1.2, camPitchRef.current + dy * 0.005));
+      lastMouseRef.current = { x: e.clientX, y: e.clientY };
+    };
+    const onMouseUp = () => { isDraggingCamRef.current = false; };
+
+    // Вращение камеры тачем двумя пальцами или правым джойстиком — второй тач
+    let camTouchId: number | null = null;
+    let lastCamTouch = { x: 0, y: 0 };
+    const onCamTouchStart = (e: TouchEvent) => {
+      if (placementModeRef.current) return;
+      if (e.touches.length === 2) {
+        const t = e.touches[1];
+        camTouchId = t.identifier;
+        lastCamTouch = { x: t.clientX, y: t.clientY };
+      }
+    };
+    const onCamTouchMove = (e: TouchEvent) => {
+      if (camTouchId === null) return;
+      const t = Array.from(e.touches).find(x => x.identifier === camTouchId);
+      if (!t) return;
+      const dx = t.clientX - lastCamTouch.x;
+      const dy = t.clientY - lastCamTouch.y;
+      camYawRef.current -= dx * 0.008;
+      camPitchRef.current = Math.max(0.1, Math.min(1.2, camPitchRef.current + dy * 0.008));
+      lastCamTouch = { x: t.clientX, y: t.clientY };
+    };
+    const onCamTouchEnd = (e: TouchEvent) => {
+      if (Array.from(e.touches).every(t => t.identifier !== camTouchId)) camTouchId = null;
     };
 
     const canvas = mountRef.current;
@@ -525,9 +607,15 @@ export default function GameWorld() {
     window.addEventListener("click", onClick);
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("click", onClickPlace);
+    window.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("mousemove", onMouseDrag);
+    window.addEventListener("mouseup", onMouseUp);
     if (canvas) {
       canvas.addEventListener("touchmove", onTouchMovePlacement, { passive: true });
       canvas.addEventListener("touchend", onTouchEndPlacement);
+      canvas.addEventListener("touchstart", onCamTouchStart, { passive: true });
+      canvas.addEventListener("touchmove", onCamTouchMove, { passive: true });
+      canvas.addEventListener("touchend", onCamTouchEnd);
     }
     return () => {
       window.removeEventListener("keydown", onKeyDown);
@@ -535,9 +623,15 @@ export default function GameWorld() {
       window.removeEventListener("click", onClick);
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("click", onClickPlace);
+      window.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("mousemove", onMouseDrag);
+      window.removeEventListener("mouseup", onMouseUp);
       if (canvas) {
         canvas.removeEventListener("touchmove", onTouchMovePlacement);
         canvas.removeEventListener("touchend", onTouchEndPlacement);
+        canvas.removeEventListener("touchstart", onCamTouchStart);
+        canvas.removeEventListener("touchmove", onCamTouchMove);
+        canvas.removeEventListener("touchend", onCamTouchEnd);
       }
     };
   }, [triggerAttack, confirmPlacement]);
@@ -661,7 +755,7 @@ export default function GameWorld() {
       {!isMobile && (
         <div className="absolute bottom-20 right-3 z-10 px-3 py-2 rounded font-pixel text-[7px] leading-relaxed"
           style={{ background: "#00000088", border: "1px solid #ffffff22", color: "#ffffff88", backdropFilter: "blur(4px)" }}>
-          WASD — движение<br />ПРОБЕЛ — прыжок<br />ЛКМ — удар<br />E — сесть/выйти
+          WASD — движение<br />ПРОБЕЛ — прыжок<br />ЛКМ — удар<br />Q/R — поворот камеры<br />DRAG мышью — вращение<br />E — сесть/выйти
         </div>
       )}
 
