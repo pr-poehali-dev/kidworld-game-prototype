@@ -34,7 +34,7 @@ def handler(event: dict, context) -> dict:
             'body': json.dumps({'error': 'message is required'})
         }
 
-    api_key = os.environ.get('ANTHROPIC_API_KEY4', '')
+    api_key = os.environ.get('ANTHROPIC_API_KEY5', '')
     if not api_key:
         return {
             'statusCode': 200,
