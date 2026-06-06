@@ -409,7 +409,12 @@ export default function GameWorld() {
   }, []);
 
   useEffect(() => {
+    const isTyping = () => {
+      const el = document.activeElement;
+      return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement;
+    };
     const onKeyDown = (e: KeyboardEvent) => {
+      if (isTyping()) return;
       const k = keysRef.current;
       if (e.code === "KeyW") k.w = true;
       if (e.code === "KeyA") k.a = true;
@@ -419,6 +424,7 @@ export default function GameWorld() {
       if (e.code === "KeyE") handleMount();
     };
     const onKeyUp = (e: KeyboardEvent) => {
+      if (isTyping()) return;
       const k = keysRef.current;
       if (e.code === "KeyW") k.w = false; if (e.code === "KeyA") k.a = false;
       if (e.code === "KeyS") k.s = false; if (e.code === "KeyD") k.d = false;
