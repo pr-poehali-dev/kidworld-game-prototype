@@ -139,6 +139,7 @@ pos Y=0 — поверхность земли.
 2. proc_build (детали): {"action":"proc_build","name":"...","parts":[...],"mountable":bool,"mount_offset":[x,y,z],"speed":8,"count":1}
 3. add_enemy: {"action":"add_enemy","count":N}
 4. change_weapon: {"action":"change_weapon","effect":"fire_blue|ice|lightning|normal"}
+5. change_skin: {"action":"change_skin","skin":"orc|goblin|elf|giant|robot|vampire|default"}
 
 ПРАВИЛА:
 - Возвращай ТОЛЬКО валидный JSON без markdown без комментариев
@@ -147,6 +148,16 @@ pos Y=0 — поверхность земли.
 - Пресет ВСЕГДА лучше чем плохие детали
 
 Формат ответа: {"commands":[...],"reply":"Весёлый ответ с эмодзи!"}"""
+
+    world_state = body.get('world_state', {})
+    selected_object = body.get('selected_object', None)
+
+    user_context = f'Стиль мира: {style}.'
+    if world_state:
+        user_context += f' Врагов в мире: {world_state.get("enemies_count", 0)}.'
+    if selected_object:
+        user_context += f' Игрок выбрал объект: "{selected_object.get("name", "объект")}". Если запрос касается изменения — примени к нему.'
+    user_context += f' Запрос игрока: {message}'
 
     payload = {
         'modelUri': f'gpt://{folder_id}/yandexgpt/latest',
@@ -157,7 +168,7 @@ pos Y=0 — поверхность земли.
         },
         'messages': [
             {'role': 'system', 'text': system_prompt},
-            {'role': 'user', 'text': f'Стиль мира: {style}. Запрос игрока: {message}'}
+            {'role': 'user', 'text': user_context}
         ]
     }
 

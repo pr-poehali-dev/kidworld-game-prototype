@@ -28,7 +28,12 @@ const THEMES = {
 
 type ThemeKey = keyof typeof THEMES;
 
-interface EnemyObj { id: string; mesh: THREE.Group; hp: number; }
+interface EnemyObj {
+  id: string; mesh: THREE.Group; hp: number; maxHp: number;
+  hpBar?: THREE.Mesh; // плашка HP
+  shootTimer: number; // таймер стрельбы
+  weapon?: THREE.Group; // лук в руках врага
+}
 
 interface PartSpec {
   geo: { type: string; w?: number; h?: number; d?: number; r?: number; rt?: number; rb?: number; segments?: number };
@@ -453,6 +458,14 @@ export default function GameWorld() {
   const floorPlaneRef = useRef(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0));
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
 
+  const [playerSkin, setPlayerSkin] = useState<string>("default");
+  const playerSkinRef = useRef<string>("default");
+  const selectedObjectRef = useRef<THREE.Group | null>(null);
+  const [selectedObjectName, setSelectedObjectName] = useState<string | null>(null);
+  const placedObjectsRef = useRef<{mesh: THREE.Group, name: string, cmd: GameCommand}[]>([]);
+  const [showSkinMenu, setShowSkinMenu] = useState(false);
+  const changePlayerSkinRef = useRef<((skin: string) => void) | null>(null);
+
   const [enemyCount, setEnemyCount] = useState(3);
   const [chatMessage, setChatMessage] = useState("");
   const [chatHistory, setChatHistory] = useState<{ role: "user" | "ai"; text: string }[]>([
@@ -475,7 +488,29 @@ export default function GameWorld() {
     const light = new THREE.PointLight(theme.enemyColor, 1, 3);
     light.position.set(0, 0.5, 0);
     mesh.add(light);
-    const enemy: EnemyObj = { id: `e_${Date.now()}_${Math.random()}`, mesh, hp: 3 };
+
+    // HP бар (плоская плашка над головой)
+    const hpBarBg = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.1), new THREE.MeshStandardMaterial({ color: 0x330000, depthTest: false }));
+    hpBarBg.position.set(0, 2.0, 0);
+    mesh.add(hpBarBg);
+    const hpBar = new THREE.Mesh(new THREE.PlaneGeometry(0.78, 0.08), new THREE.MeshStandardMaterial({ color: 0x22cc44, emissive: new THREE.Color(0x22cc44), emissiveIntensity: 0.5, depthTest: false }));
+    hpBar.position.set(0, 2.0, 0.01);
+    mesh.add(hpBar);
+
+    // Лук врага
+    const bowGroup = new THREE.Group();
+    const bowArm = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.7, 5), new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.9 }));
+    bowArm.rotation.z = Math.PI / 2;
+    bowGroup.add(bowArm);
+    const bowString = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.72, 4), new THREE.MeshStandardMaterial({ color: 0xddddaa }));
+    bowString.rotation.z = Math.PI / 2;
+    bowString.position.z = 0.1;
+    bowGroup.add(bowString);
+    bowGroup.position.set(0.5, 0.05, 0.3);
+    bowGroup.rotation.y = -0.3;
+    mesh.add(bowGroup);
+
+    const enemy: EnemyObj = { id: `e_${Date.now()}_${Math.random()}`, mesh, hp: 3, maxHp: 3, shootTimer: 2 + Math.random() * 2, hpBar, weapon: bowGroup };
     enemiesRef.current.push(enemy);
     setEnemyCount(enemiesRef.current.length);
   }, [theme]);
@@ -528,6 +563,7 @@ export default function GameWorld() {
       obj.position.set(position.x + Math.sin(angle) * offset, 0, position.z + Math.cos(angle) * offset);
       obj.scale.setScalar(scale);
       scene.add(obj);
+      placedObjectsRef.current.push({ mesh: obj, name: cmd.name || "объект", cmd });
       setTimeout(() => {
         const box = new THREE.Box3().setFromObject(obj!);
         if (!box.isEmpty()) collidersRef.current.push(box);
@@ -602,6 +638,11 @@ export default function GameWorld() {
       (weaponRef.current.material as THREE.MeshStandardMaterial).color.setHex(c);
       (weaponRef.current.material as THREE.MeshStandardMaterial).emissive.setHex(c);
     }
+
+    // Смена скина
+    if (cmd.action === "change_skin" && cmd.skin) {
+      if (changePlayerSkinRef.current) changePlayerSkinRef.current(cmd.skin);
+    }
   }, [spawnEnemy, theme]);
 
   // Three.js init
@@ -657,13 +698,42 @@ export default function GameWorld() {
     player.position.copy(playerPosRef.current);
     scene.add(player);
     playerRef.current = player;
-    const weapon = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.85, 0.12),
-      new THREE.MeshStandardMaterial({ color: theme.playerColor, emissive: theme.playerColor, emissiveIntensity: 0.7, roughness: 0.1 }));
-    weapon.position.set(0.7, 0.1, 0.1);
-    player.add(weapon);
-    weaponRef.current = weapon;
+    const weaponGroup = new THREE.Group();
+    // Лезвие меча
+    const blade = new THREE.Mesh(
+      new THREE.BoxGeometry(0.06, 0.75, 0.015),
+      new THREE.MeshStandardMaterial({ color: 0xDDDDEE, metalness: 0.95, roughness: 0.05 })
+    );
+    blade.position.y = 0.15;
+    weaponGroup.add(blade);
+    // Гарда
+    const guard = new THREE.Mesh(
+      new THREE.BoxGeometry(0.28, 0.05, 0.05),
+      new THREE.MeshStandardMaterial({ color: 0xB8860B, metalness: 0.8, roughness: 0.2 })
+    );
+    guard.position.y = -0.22;
+    weaponGroup.add(guard);
+    // Рукоять
+    const hilt = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.035, 0.03, 0.25, 6),
+      new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.9 })
+    );
+    hilt.position.y = -0.37;
+    weaponGroup.add(hilt);
+    // Навершие
+    const pommel = new THREE.Mesh(
+      new THREE.SphereGeometry(0.055, 6, 5),
+      new THREE.MeshStandardMaterial({ color: 0xB8860B, metalness: 0.7 })
+    );
+    pommel.position.y = -0.51;
+    weaponGroup.add(pommel);
+    weaponGroup.position.set(0.45, 0.0, 0.2);
+    weaponGroup.rotation.set(0, 0, 0.2);
+    player.add(weaponGroup);
+    weaponRef.current = blade;
+    // Свет оружия
     const wLight = new THREE.PointLight(theme.playerColor, 1.5, 3);
-    wLight.position.set(0.7, 0.1, 0.1);
+    wLight.position.set(0.45, 0.0, 0.2);
     player.add(wLight);
 
     // Default enemies
@@ -685,6 +755,7 @@ export default function GameWorld() {
     const animate = () => {
       rafRef.current = requestAnimationFrame(animate);
       const delta = Math.min(clock.getDelta(), 0.05);
+      const walkTime = clock.elapsedTime;
       const k = keysRef.current;
       const j = joystickRef.current;
 
@@ -741,12 +812,41 @@ export default function GameWorld() {
       }
 
       if (player) {
-        player.position.copy(playerPosRef.current);
+        const isWalking = moveDir.length() > 0;
+        // Боб тела при ходьбе
+        player.position.set(
+          playerPosRef.current.x,
+          playerPosRef.current.y + (isWalking ? Math.sin(walkTime * 10) * 0.04 : 0),
+          playerPosRef.current.z
+        );
         player.rotation.y = playerRotRef.current;
-        const armR = player.children[5] as THREE.Object3D;
-        if (armR) {
-          if (attackTimerRef.current > 0) { armR.rotation.x = -Math.PI / 2; attackTimerRef.current -= delta; }
-          else armR.rotation.x = THREE.MathUtils.lerp(armR.rotation.x, 0, 0.2);
+
+        // player children (glowEyes=false): 0=body,1=head,2=hair,3=eyeL,4=pupilL,5=eyeR,6=pupilR,7=armL,8=armR,9=legL,10=legR,11=shoeL,12=shoeR
+        // Атака — правая рука (index 8)
+        const armRAtk = player.children[8] as THREE.Object3D;
+        if (armRAtk) {
+          if (attackTimerRef.current > 0) { armRAtk.rotation.x = -Math.PI / 2; attackTimerRef.current -= delta; }
+          else armRAtk.rotation.x = THREE.MathUtils.lerp(armRAtk.rotation.x, 0, 0.2);
+        }
+
+        // Ноги (indices 9, 10)
+        const legLp = player.children[9] as THREE.Object3D;
+        const legRp = player.children[10] as THREE.Object3D;
+        if (legLp && legRp) {
+          const swing = isWalking ? Math.sin(walkTime * 10) * 0.5 : 0;
+          legLp.rotation.x = THREE.MathUtils.lerp(legLp.rotation.x, swing, 0.3);
+          legRp.rotation.x = THREE.MathUtils.lerp(legRp.rotation.x, -swing, 0.3);
+        }
+
+        // Руки (противофазно ногам, indices 7=armL, 8=armR)
+        const armLp = player.children[7] as THREE.Object3D;
+        const armRp = player.children[8] as THREE.Object3D;
+        if (armLp && armRp) {
+          const armSwing = isWalking ? Math.sin(walkTime * 10) * 0.4 : 0;
+          if (attackTimerRef.current <= 0) {
+            armLp.rotation.x = THREE.MathUtils.lerp(armLp.rotation.x, -armSwing, 0.3);
+            armRp.rotation.x = THREE.MathUtils.lerp(armRp.rotation.x, armSwing, 0.3);
+          }
         }
       }
 
@@ -763,21 +863,98 @@ export default function GameWorld() {
         const dx = playerPosRef.current.x - e.mesh.position.x;
         const dz = playerPosRef.current.z - e.mesh.position.z;
         const dist = Math.sqrt(dx * dx + dz * dz);
+
         if (dist > 0.5) {
-          e.mesh.position.x += (dx / dist) * 0.025;
-          e.mesh.position.z += (dz / dist) * 0.025;
-          e.mesh.rotation.y = Math.atan2(dx, dz);
+          // Steering behavior — уклонение от коллайдеров
+          let steerX = dx / dist;
+          let steerZ = dz / dist;
+
+          for (const col of collidersRef.current) {
+            const center = new THREE.Vector3();
+            col.getCenter(center);
+            const obsDx = e.mesh.position.x - center.x;
+            const obsDz = e.mesh.position.z - center.z;
+            const obsDist = Math.sqrt(obsDx * obsDx + obsDz * obsDz);
+            if (obsDist < 2.5 && obsDist > 0) {
+              const repel = (2.5 - obsDist) / 2.5;
+              steerX += (obsDx / obsDist) * repel * 2;
+              steerZ += (obsDz / obsDist) * repel * 2;
+            }
+          }
+
+          const steerLen = Math.sqrt(steerX * steerX + steerZ * steerZ);
+          if (steerLen > 0) { steerX /= steerLen; steerZ /= steerLen; }
+
+          const enemySpeed = 0.028;
+          e.mesh.position.x += steerX * enemySpeed;
+          e.mesh.position.z += steerZ * enemySpeed;
+          e.mesh.rotation.y = Math.atan2(steerX, steerZ);
+
+          // Анимация ходьбы врага
+          const eLegL = e.mesh.children[7] as THREE.Object3D;
+          const eLegR = e.mesh.children[8] as THREE.Object3D;
+          if (eLegL && eLegR) {
+            const eIdHash = parseInt(e.id.replace(/[^0-9a-f]/gi, '').slice(-4) || '0', 16);
+            const eSwing = Math.sin(walkTime * 10 + eIdHash * 0.001) * 0.5;
+            eLegL.rotation.x = THREE.MathUtils.lerp(eLegL.rotation.x, eSwing, 0.3);
+            eLegR.rotation.x = THREE.MathUtils.lerp(eLegR.rotation.x, -eSwing, 0.3);
+          }
+        }
+
+        // Стрельба стрелами
+        e.shootTimer -= delta;
+        if (e.shootTimer <= 0 && dist < 18 && dist > 2) {
+          e.shootTimer = 2.5 + Math.random() * 2;
+          const arrow = new THREE.Group();
+          const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.8, 5), new THREE.MeshStandardMaterial({ color: 0xA0522D }));
+          shaft.rotation.x = Math.PI / 2;
+          arrow.add(shaft);
+          const tip = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.2, 4), new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.8 }));
+          tip.rotation.x = Math.PI / 2;
+          tip.position.z = 0.5;
+          arrow.add(tip);
+          arrow.position.copy(e.mesh.position);
+          arrow.position.y += 0.8;
+          const arrowDir = new THREE.Vector3(dx, 0, dz).normalize();
+          arrow.lookAt(arrow.position.clone().add(arrowDir));
+          arrow.userData.vel = arrowDir.multiplyScalar(10);
+          arrow.userData.life = 2;
+          arrow.userData.isArrow = true;
+          scene.add(arrow);
+        }
+
+        // Обновление HP бара
+        if (e.hpBar) {
+          const hpFrac = e.hp / e.maxHp;
+          e.hpBar.scale.x = Math.max(0, hpFrac);
+          e.hpBar.position.x = -(1 - hpFrac) * 0.39;
+          const hpMat = e.hpBar.material as THREE.MeshStandardMaterial;
+          const newColor = hpFrac > 0.6 ? 0x22cc44 : hpFrac > 0.3 ? 0xffaa00 : 0xff2200;
+          hpMat.color.setHex(newColor);
+          hpMat.emissive.setHex(newColor);
+          // HP бар смотрит на камеру
+          e.hpBar.lookAt(camera.position);
+          const hpBg = e.mesh.children[e.mesh.children.length - 3] as THREE.Mesh;
+          if (hpBg && hpBg.isMesh) hpBg.lookAt(camera.position);
         }
       });
 
-      // Particles
+      // Particles + стрелы
       const toRemove: THREE.Object3D[] = [];
       scene.children.forEach((obj) => {
         if (obj.userData.life !== undefined) {
           obj.userData.life -= delta;
           if (obj.userData.vel) obj.position.addScaledVector(obj.userData.vel as THREE.Vector3, delta);
-          if (obj.userData.vel) (obj.userData.vel as THREE.Vector3).y -= 8 * delta;
-          obj.scale.multiplyScalar(0.97);
+          if (obj.userData.vel && !obj.userData.isArrow) (obj.userData.vel as THREE.Vector3).y -= 8 * delta;
+          if (!obj.userData.isArrow) obj.scale.multiplyScalar(0.97);
+          // Проверка попадания стрелы в игрока
+          if (obj.userData.isArrow) {
+            const adx = playerPosRef.current.x - obj.position.x;
+            const adz = playerPosRef.current.z - obj.position.z;
+            if (Math.sqrt(adx * adx + adz * adz) < 0.8 && Math.abs(playerPosRef.current.y - obj.position.y) < 1.5) {
+              obj.userData.life = 0;
+            }
+          }
           if (obj.userData.life <= 0) toRemove.push(obj);
         }
       });
@@ -880,6 +1057,58 @@ export default function GameWorld() {
 
     const onClick = (e: MouseEvent) => {
       if (placementModeRef.current) return;
+
+      // Проверяем клик на размещённый объект
+      const ndc = getCanvasNDC(e.clientX, e.clientY);
+      if (ndc && cameraRef.current) {
+        raycasterRef.current.setFromCamera(ndc, cameraRef.current);
+        const allMeshes: THREE.Mesh[] = [];
+        placedObjectsRef.current.forEach(po => {
+          po.mesh.traverse(child => { if ((child as THREE.Mesh).isMesh) allMeshes.push(child as THREE.Mesh); });
+        });
+        const hits = raycasterRef.current.intersectObjects(allMeshes);
+        if (hits.length > 0) {
+          let parent: THREE.Object3D | null = hits[0].object;
+          while (parent && !(parent instanceof THREE.Group && placedObjectsRef.current.some(p => p.mesh === parent))) {
+            parent = parent.parent;
+          }
+          if (parent) {
+            const placed = placedObjectsRef.current.find(p => p.mesh === parent);
+            if (placed) {
+              // Снимаем подсветку с предыдущего
+              if (selectedObjectRef.current && selectedObjectRef.current !== placed.mesh) {
+                selectedObjectRef.current.traverse(child => {
+                  if ((child as THREE.Mesh).isMesh) {
+                    const m = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
+                    if (m && m.emissiveIntensity !== undefined) m.emissiveIntensity = 0;
+                  }
+                });
+              }
+              selectedObjectRef.current = placed.mesh;
+              setSelectedObjectName(placed.name);
+              placed.mesh.traverse(child => {
+                if ((child as THREE.Mesh).isMesh) {
+                  const mat = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
+                  if (mat && mat.emissiveIntensity !== undefined) mat.emissiveIntensity = 0.4;
+                }
+              });
+              return;
+            }
+          }
+        }
+        // Клик не по объекту — снимаем выбор
+        if (selectedObjectRef.current) {
+          selectedObjectRef.current.traverse(child => {
+            if ((child as THREE.Mesh).isMesh) {
+              const mat = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
+              if (mat && mat.emissiveIntensity !== undefined) mat.emissiveIntensity = 0;
+            }
+          });
+          selectedObjectRef.current = null;
+          setSelectedObjectName(null);
+        }
+      }
+
       if ((e.target as HTMLElement).tagName === "CANVAS") triggerAttack();
     };
 
@@ -960,9 +1189,6 @@ export default function GameWorld() {
     };
   }, [triggerAttack, confirmPlacement]);
 
-  useEffect(() => { joystickRef.current = joystick; }, [joystick]);
-  useEffect(() => { placementModeRef.current = placementMode; }, [placementMode]);
-
   const handleMount = useCallback(() => {
     if (mountedRef.current) {
       // Высадка
@@ -984,6 +1210,56 @@ export default function GameWorld() {
     }
   }, []);
 
+  const changePlayerSkin = useCallback((skin: string) => {
+    const scene = sceneRef.current;
+    if (!scene || !playerRef.current) return;
+    const oldPlayer = playerRef.current;
+    scene.remove(oldPlayer);
+
+    let color = theme.playerColor;
+    let scale = 1.0;
+
+    if (skin === "orc") { color = 0x2d7a2d; scale = 1.2; }
+    else if (skin === "goblin") { color = 0x5a8a2a; scale = 0.75; }
+    else if (skin === "elf") { color = 0xC8A882; scale = 0.95; }
+    else if (skin === "giant") { color = 0xaa6633; scale = 1.6; }
+    else if (skin === "robot") { color = 0x8888aa; scale = 1.1; }
+    else if (skin === "vampire") { color = 0x4a2060; scale = 1.0; }
+
+    const newPlayer = buildHumanoid(color, skin === "vampire" || skin === "robot");
+    newPlayer.position.copy(playerPosRef.current);
+    newPlayer.rotation.y = playerRotRef.current;
+    newPlayer.scale.setScalar(scale);
+    scene.add(newPlayer);
+    playerRef.current = newPlayer;
+    playerSkinRef.current = skin;
+    setPlayerSkin(skin);
+
+    // Восстанавливаем оружие
+    const weaponGroupNew = new THREE.Group();
+    const bladeNew = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.75, 0.015), new THREE.MeshStandardMaterial({ color: 0xDDDDEE, metalness: 0.95, roughness: 0.05 }));
+    bladeNew.position.y = 0.15;
+    weaponGroupNew.add(bladeNew);
+    const guardNew = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.05, 0.05), new THREE.MeshStandardMaterial({ color: 0xB8860B, metalness: 0.8, roughness: 0.2 }));
+    guardNew.position.y = -0.22;
+    weaponGroupNew.add(guardNew);
+    const hiltNew = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.03, 0.25, 6), new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.9 }));
+    hiltNew.position.y = -0.37;
+    weaponGroupNew.add(hiltNew);
+    weaponGroupNew.position.set(0.45 / scale, 0.0, 0.2 / scale);
+    weaponGroupNew.rotation.set(0, 0, 0.2);
+    newPlayer.add(weaponGroupNew);
+    weaponRef.current = bladeNew;
+
+    const wLightNew = new THREE.PointLight(theme.playerColor, 1.5, 3);
+    wLightNew.position.set(0.45 / scale, 0.0, 0.2 / scale);
+    newPlayer.add(wLightNew);
+  }, [theme, playerPosRef, playerRotRef]);
+
+  useEffect(() => { joystickRef.current = joystick; }, [joystick]);
+  useEffect(() => { placementModeRef.current = placementMode; }, [placementMode]);
+  useEffect(() => { changePlayerSkinRef.current = changePlayerSkin; }, [changePlayerSkin]);
+
   const scrollChatToBottom = () => {
     setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
   };
@@ -999,7 +1275,12 @@ export default function GameWorld() {
     try {
       const res = await fetch("https://functions.poehali.dev/97def82a-1abb-45e6-9c01-a082dc689fa8", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: msg, style: themeKey, world_state: { enemies_count: enemyCount } }),
+        body: JSON.stringify({
+          message: msg,
+          style: themeKey,
+          world_state: { enemies_count: enemyCount },
+          selected_object: selectedObjectName ? { name: selectedObjectName } : null,
+        }),
       });
       const data = await res.json();
       const reply = data.reply || "Готово! 🎮";
@@ -1067,6 +1348,26 @@ export default function GameWorld() {
           style={{ background: "#00000099", border: `1px solid ${theme.accentCss}`, color: theme.accentCss, backdropFilter: "blur(4px)" }}>
           {theme.name.toUpperCase()}
         </div>
+        {/* Кнопка смены скина */}
+        <div className="relative">
+          <button onClick={() => setShowSkinMenu(s => !s)}
+            className="flex items-center gap-1 px-3 py-1.5 rounded font-pixel text-[8px]"
+            style={{ background: showSkinMenu ? theme.accentCss : "#00000099", border: `1px solid ${theme.accentCss}`, color: showSkinMenu ? "#000" : theme.accentCss, backdropFilter: "blur(4px)" }}>
+            👤
+          </button>
+          {showSkinMenu && (
+            <div className="absolute top-9 left-0 z-30 rounded-lg overflow-hidden flex flex-col"
+              style={{ background: "#000000ee", border: `1px solid ${theme.accentCss}` }}>
+              {([["default","Человек"],["orc","Орк"],["goblin","Гоблин"],["elf","Эльф"],["giant","Гигант"],["robot","Робот"],["vampire","Вампир"]] as [string,string][]).map(([skin, label]) => (
+                <button key={skin} onClick={() => { changePlayerSkin(skin); setShowSkinMenu(false); }}
+                  className="px-4 py-2 font-pixel text-[8px] hover:bg-white/10 text-left whitespace-nowrap"
+                  style={{ color: playerSkin === skin ? theme.accentCss : "#ffffff" }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* HUD top-right */}
@@ -1088,6 +1389,14 @@ export default function GameWorld() {
         <div className="absolute top-16 left-1/2 z-20 px-4 py-2 rounded-xl font-rubik text-sm text-center"
           style={{ transform: "translateX(-50%)", background: "#000000cc", border: `1px solid ${theme.accentCss}`, color: theme.accentCss, backdropFilter: "blur(8px)" }}>
           {mountHint}
+        </div>
+      )}
+
+      {/* Выбранный объект */}
+      {selectedObjectName && (
+        <div className="absolute top-16 left-1/2 z-20 px-4 py-2 rounded-xl font-rubik text-sm text-center"
+          style={{ transform: "translateX(-50%)", background: "#000000cc", border: "1px solid #ffcc00", color: "#ffcc00" }}>
+          Выбран: {selectedObjectName} — напиши что изменить в чате
         </div>
       )}
 
