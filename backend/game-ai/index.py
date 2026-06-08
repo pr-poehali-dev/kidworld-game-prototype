@@ -135,11 +135,22 @@ pos Y=0 — поверхность земли.
 - Цветок: cylinder стебель + cone лепестки разных цветов
 
 ═══ КОМАНДЫ ═══
-1. proc_build (пресет): {"action":"proc_build","name":"...","preset":"...","count":1}
-2. proc_build (детали): {"action":"proc_build","name":"...","parts":[...],"mountable":bool,"mount_offset":[x,y,z],"speed":8,"count":1}
-3. add_enemy: {"action":"add_enemy","count":N}
-4. change_weapon: {"action":"change_weapon","effect":"fire_blue|ice|lightning|normal"}
-5. change_skin: {"action":"change_skin","skin":"orc|goblin|elf|giant|robot|vampire|default"}
+1. proc_build (пресет):  {"action":"proc_build","name":"...","preset":"...","count":1}
+2. proc_build (детали):  {"action":"proc_build","name":"...","parts":[...],"mountable":bool,"mount_offset":[x,y,z],"speed":8,"count":1}
+3. add_enemy:            {"action":"add_enemy","count":N}
+4. change_weapon:        {"action":"change_weapon","effect":"fire_blue|ice|lightning|normal"}
+5. change_skin:          {"action":"change_skin","skin":"orc|goblin|elf|giant|robot|vampire|default"}
+6. edit_selected (ПРЕСЕТ): {"action":"edit_selected","name":"...","preset":"ИМЯ_ПРЕСЕТА"}
+7. edit_selected (ДЕТАЛИ): {"action":"edit_selected","name":"...","parts":[...],"mountable":bool,"speed":8}
+8. modify_selected:      {"action":"modify_selected","effect":"red|blue|gold|green","scale":1.5}
+
+═══ КОГДА ИСПОЛЬЗОВАТЬ edit_selected ═══
+Если в контексте написано "Игрок выбрал объект: X" И запрос касается изменения этого объекта:
+- "сделай колёса больше" → edit_selected с новой сборкой car с большими колёсами
+- "добавь дверь" → edit_selected с новой сборкой здания с дверью
+- "перекрась в красный" → modify_selected с effect:"red"
+- "сделай больше" → modify_selected с scale:2.0
+- "теперь это дракон" → edit_selected с preset:"dragon"
 
 ПРАВИЛА:
 - Возвращай ТОЛЬКО валидный JSON без markdown без комментариев

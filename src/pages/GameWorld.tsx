@@ -562,6 +562,13 @@ export default function GameWorld() {
       const offset = copies > 1 ? 3 : 0;
       obj.position.set(position.x + Math.sin(angle) * offset, 0, position.z + Math.cos(angle) * offset);
       obj.scale.setScalar(scale);
+      // Помечаем живых существ для анимации
+      const livingPresets = ["cat","dog","person","human","friend","robot","dragon","orc","goblin","elf","giant","vampire"];
+      if (cmd.preset && livingPresets.includes(cmd.preset)) {
+        obj.userData.isAlive = true;
+        obj.userData.animPhase = Math.random() * Math.PI * 2;
+        obj.userData.animType = cmd.preset;
+      }
       scene.add(obj);
       placedObjectsRef.current.push({ mesh: obj, name: cmd.name || "объект", cmd });
       setTimeout(() => {
@@ -642,6 +649,71 @@ export default function GameWorld() {
     // Смена скина
     if (cmd.action === "change_skin" && cmd.skin) {
       if (changePlayerSkinRef.current) changePlayerSkinRef.current(cmd.skin);
+    }
+
+    // Редактирование выбранного объекта — перестроить его на месте
+    if (cmd.action === "edit_selected" || cmd.action === "proc_build_selected") {
+      const sel = selectedObjectRef.current;
+      const selEntry = placedObjectsRef.current.find(p => p.mesh === sel);
+      if (sel && selEntry) {
+        const oldPos = sel.position.clone();
+        const oldRot = sel.rotation.clone();
+        const oldScale = sel.scale.clone();
+        scene.remove(sel);
+        // Удаляем коллайдер
+        collidersRef.current = collidersRef.current.filter(b => {
+          const c = new THREE.Vector3(); b.getCenter(c);
+          return !(Math.abs(c.x - oldPos.x) < 3 && Math.abs(c.z - oldPos.z) < 3);
+        });
+        let newObj: THREE.Group | null = null;
+        if (cmd.preset) newObj = buildPreset(cmd.preset);
+        if (!newObj && cmd.parts && cmd.parts.length > 0) newObj = buildFromSpec(cmd.parts);
+        if (newObj) {
+          newObj.position.copy(oldPos);
+          newObj.rotation.copy(oldRot);
+          newObj.scale.copy(oldScale);
+          const livingPresets = ["cat","dog","person","human","friend","robot","dragon","orc","goblin","elf","giant","vampire"];
+          if (cmd.preset && livingPresets.includes(cmd.preset)) {
+            newObj.userData.isAlive = true;
+            newObj.userData.animPhase = Math.random() * Math.PI * 2;
+            newObj.userData.animType = cmd.preset;
+          }
+          scene.add(newObj);
+          selEntry.mesh = newObj;
+          selEntry.cmd = cmd;
+          selectedObjectRef.current = newObj;
+          setTimeout(() => {
+            const box = new THREE.Box3().setFromObject(newObj!);
+            if (!box.isEmpty()) collidersRef.current.push(box);
+          }, 100);
+          if (cmd.mountable) {
+            mountablesRef.current = mountablesRef.current.filter(m => m.mesh !== sel);
+            mountablesRef.current.push({
+              mesh: newObj,
+              speed: cmd.speed ?? 8,
+              mountOffset: new THREE.Vector3(...(cmd.mount_offset ?? [0, 1.2, 0])),
+            });
+          }
+        }
+      }
+      return;
+    }
+
+    // Модификация цвета/размера выбранного объекта
+    if (cmd.action === "modify_selected") {
+      const sel = selectedObjectRef.current;
+      if (sel) {
+        if (cmd.scale !== undefined) sel.scale.setScalar(cmd.scale as unknown as number);
+        if (cmd.effect) {
+          const c = cmd.effect.includes("red") ? 0xff2200 : cmd.effect.includes("blue") ? 0x2244ff
+            : cmd.effect.includes("gold") ? 0xffcc00 : cmd.effect.includes("green") ? 0x22cc44 : 0xffffff;
+          sel.traverse(child => {
+            if (child instanceof THREE.Mesh) {
+              (child.material as THREE.MeshStandardMaterial).color.setHex(c);
+            }
+          });
+        }
+      }
     }
   }, [spawnEnemy, theme]);
 
@@ -796,7 +868,7 @@ export default function GameWorld() {
         for (const col of collidersRef.current) {
           if (col.intersectsBox(pBox)) { blocked = true; break; }
         }
-        if (!blocked) {
+        if (moveDir.length() > 0 && !blocked) {
           playerVelRef.current.x = moveDir.x * spd;
           playerVelRef.current.z = moveDir.z * spd;
         } else {
@@ -936,6 +1008,46 @@ export default function GameWorld() {
           e.hpBar.lookAt(camera.position);
           const hpBg = e.mesh.children[e.mesh.children.length - 3] as THREE.Mesh;
           if (hpBg && hpBg.isMesh) hpBg.lookAt(camera.position);
+        }
+      });
+
+      // Анимация живых размещённых существ
+      placedObjectsRef.current.forEach((po) => {
+        if (!po.mesh.userData.isAlive) return;
+        const t = walkTime + (po.mesh.userData.animPhase || 0);
+        const aType = po.mesh.userData.animType as string;
+        // Лёгкое покачивание тела (боб)
+        po.mesh.position.y = Math.sin(t * 1.8) * 0.04;
+        if (aType === "cat" || aType === "dog") {
+          // Животные: качание лапами (children 9-12 для кошки, зависит от buildPreset)
+          po.mesh.children.forEach((child, i) => {
+            if (i >= po.mesh.children.length - 4 && child instanceof THREE.Mesh) {
+              const phase = (i % 2 === 0) ? t * 4 : t * 4 + Math.PI;
+              child.rotation.x = Math.sin(phase) * 0.35;
+            }
+          });
+          // Голова смотрит по сторонам
+          if (po.mesh.children[1]) po.mesh.children[1].rotation.y = Math.sin(t * 0.7) * 0.3;
+        } else if (aType === "dragon") {
+          // Дракон: взмахи крыльями + покачивание головы
+          po.mesh.rotation.y += 0.004;
+          if (po.mesh.children[9]) po.mesh.children[9].rotation.z = Math.sin(t * 2) * 0.4; // крыло L
+          if (po.mesh.children[10]) po.mesh.children[10].rotation.z = -Math.sin(t * 2) * 0.4; // крыло R
+          if (po.mesh.children[2]) po.mesh.children[2].rotation.x = Math.sin(t * 1.2) * 0.15; // шея
+        } else if (aType === "robot") {
+          // Робот: качание рук, мигание глаз
+          if (po.mesh.children[5]) po.mesh.children[5].rotation.x = Math.sin(t * 2) * 0.4; // рука L
+          if (po.mesh.children[6]) po.mesh.children[6].rotation.x = -Math.sin(t * 2) * 0.4; // рука R
+          if (po.mesh.children[7]) po.mesh.children[7].rotation.y = Math.sin(t * 0.5) * 0.5; // голова поворот
+        } else {
+          // Человекоподобные (person/elf/orc/goblin/giant/vampire): ходьба на месте
+          po.mesh.rotation.y = Math.sin(t * 0.4) * 0.6; // осмотр по сторонам
+          // Руки качаются
+          if (po.mesh.children[10]) po.mesh.children[10].rotation.x = Math.sin(t * 2) * 0.4;
+          if (po.mesh.children[11]) po.mesh.children[11].rotation.x = -Math.sin(t * 2) * 0.4;
+          // Ноги
+          if (po.mesh.children[14]) po.mesh.children[14].rotation.x = Math.sin(t * 2) * 0.3;
+          if (po.mesh.children[15]) po.mesh.children[15].rotation.x = -Math.sin(t * 2) * 0.3;
         }
       });
 
